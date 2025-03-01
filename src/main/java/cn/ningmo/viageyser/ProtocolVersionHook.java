@@ -524,7 +524,10 @@ public class ProtocolVersionHook {
             
             Object codecs = codecsField.get(null);
             if (codecs instanceof java.util.List) {
-                java.util.List<?> codecsList = (java.util.List<?>) codecs;
+                // 使用原始类型避免泛型转换问题
+                @SuppressWarnings("unchecked")
+                java.util.List<Object> codecsList = (java.util.List<Object>) codecs;
+                
                 if (debug) {
                     logger.info("SUPPORTED_BEDROCK_CODECS 是一个 List，包含 " + codecsList.size() + " 个条目");
                 }
@@ -543,6 +546,7 @@ public class ProtocolVersionHook {
                 java.lang.reflect.Method buildMethod = builder.getClass().getMethod("build");
                 
                 // 创建新的 codec 并添加到列表中
+                boolean modified = false;
                 for (int version = minProtocolVersion; version < 600; version++) {
                     // 检查这个版本是否已经存在
                     boolean exists = false;
@@ -565,11 +569,14 @@ public class ProtocolVersionHook {
                         if (debug) {
                             logger.info("添加协议版本 " + version + " 的支持");
                         }
+                        modified = true;
                     }
                 }
                 
-                logger.info("成功修改 GameProtocol 的 SUPPORTED_BEDROCK_CODECS，添加了对低版本的支持");
-                return true;
+                if (modified) {
+                    logger.info("成功修改 GameProtocol 的 SUPPORTED_BEDROCK_CODECS，添加了对低版本的支持");
+                    return true;
+                }
             }
             
             return false;
