@@ -45,14 +45,14 @@ public class ProtocolVersionHook {
             // 尝试多种可能的字段名称和类路径
             boolean success = false;
             
+            // 首先尝试修改连接处理器中的版本检查
+            success = tryModifyConnectionHandler() || success;
+            
             // 尝试修改 BedrockProtocol 类中的协议版本常量
             success = tryModifyBedrockProtocol() || success;
             
             // 尝试修改会话管理器中的版本检查逻辑
             success = tryModifySessionManager(geyser) || success;
-            
-            // 尝试修改连接处理器中的版本检查
-            success = tryModifyConnectionHandler() || success;
             
             return success;
         } catch (Exception e) {
@@ -368,11 +368,217 @@ public class ProtocolVersionHook {
                 return false;
             }
             
-            // 目前我们不实际修改连接处理器，因为这需要字节码操作
-            // 返回 false 表示此方法未成功修改任何内容
+            // 尝试查找和修改 BedrockCodec 类
+            boolean modified = tryModifyBedrockCodec();
+            if (modified) {
+                return true;
+            }
+            
             return false;
         } catch (Exception e) {
             logger.warning("修改连接处理器失败: " + e.getMessage());
+            if (debug) {
+                e.printStackTrace();
+            }
+            return false;
+        }
+    }
+    
+    private boolean tryModifyBedrockCodec() {
+        try {
+            // 尝试找到 BedrockCodec 类
+            String[] possibleCodecClasses = {
+                "org.cloudburstmc.protocol.bedrock.codec.BedrockCodec",
+                "org.geysermc.connector.network.BedrockCodec",
+                "org.geysermc.geyser.network.BedrockCodec",
+                "com.nukkitx.protocol.bedrock.BedrockCodec"
+            };
+            
+            Class<?> codecClass = null;
+            for (String className : possibleCodecClasses) {
+                try {
+                    codecClass = Class.forName(className);
+                    if (debug) {
+                        logger.info("找到 BedrockCodec 类: " + className);
+                    }
+                    break;
+                } catch (ClassNotFoundException ignored) {
+                    // 继续尝试下一个类名
+                }
+            }
+            
+            if (codecClass == null) {
+                logger.warning("无法找到 BedrockCodec 类");
+                return false;
+            }
+            
+            // 尝试获取 CODEC_LOOKUP 字段
+            Field lookupField = null;
+            String[] possibleLookupFields = {
+                "CODEC_LOOKUP", "SUPPORTED_CODECS", "CODECS", "CODEC_BY_VERSION"
+            };
+            
+            for (String fieldName : possibleLookupFields) {
+                try {
+                    lookupField = codecClass.getDeclaredField(fieldName);
+                    if (debug) {
+                        logger.info("找到 CODEC_LOOKUP 字段: " + fieldName);
+                    }
+                    break;
+                } catch (NoSuchFieldException ignored) {
+                    // 继续尝试下一个字段名
+                }
+            }
+            
+            if (lookupField == null) {
+                // 尝试查找任何看起来像 Map 的静态字段
+                for (Field field : codecClass.getDeclaredFields()) {
+                    if (java.lang.reflect.Modifier.isStatic(field.getModifiers()) && 
+                        (field.getType() == java.util.Map.class || 
+                         field.getType().getName().contains("Map") || 
+                         field.getType().getName().contains("Collection"))) {
+                        lookupField = field;
+                        if (debug) {
+                            logger.info("找到可能的 CODEC_LOOKUP 字段: " + field.getName());
+                        }
+                        break;
+                    }
+                }
+            }
+            
+            if (lookupField == null) {
+                logger.warning("无法找到 CODEC_LOOKUP 字段");
+                return false;
+            }
+            
+            // 尝试修改 CODEC_LOOKUP 字段
+            lookupField.setAccessible(true);
+            Object lookup = lookupField.get(null);
+            
+            if (lookup instanceof java.util.Map) {
+                java.util.Map<?, ?> map = (java.util.Map<?, ?>) lookup;
+                if (debug) {
+                    logger.info("CODEC_LOOKUP 是一个 Map，包含 " + map.size() + " 个条目");
+                    for (Object key : map.keySet()) {
+                        logger.info("  - 协议版本: " + key);
+                    }
+                }
+                
+                // 尝试找到最新的 codec
+                Object latestCodec = null;
+                Integer latestVersion = null;
+                for (Object key : map.keySet()) {
+                    if (key instanceof Integer) {
+                        int version = (Integer) key;
+                        if (latestVersion == null || version > latestVersion) {
+                            latestVersion = version;
+                            latestCodec = map.get(key);
+                        }
+                    }
+                }
+                
+                if (latestCodec != null && latestVersion != null) {
+                    // 尝试使用反射修改 Map
+                    try {
+                        // 获取 Map 的 put 方法
+                        java.lang.reflect.Method putMethod = map.getClass().getMethod("put", Object.class, Object.class);
+                        
+                        // 为低版本添加相同的 codec
+                        for (int version = minProtocolVersion; version < latestVersion; version++) {
+                            if (!map.containsKey(version)) {
+                                putMethod.invoke(map, version, latestCodec);
+                                if (debug) {
+                                    logger.info("添加协议版本 " + version + " 的支持");
+                                }
+                            }
+                        }
+                        
+                        logger.info("成功修改 BedrockCodec 的 CODEC_LOOKUP，添加了对低版本的支持");
+                        return true;
+                    } catch (Exception e) {
+                        if (debug) {
+                            logger.warning("修改 CODEC_LOOKUP 失败: " + e.getMessage());
+                            e.printStackTrace();
+                        }
+                    }
+                }
+            }
+            
+            // 尝试查找和修改 GameProtocol 类
+            return tryModifyGameProtocol();
+        } catch (Exception e) {
+            logger.warning("修改 BedrockCodec 失败: " + e.getMessage());
+            if (debug) {
+                e.printStackTrace();
+            }
+            return false;
+        }
+    }
+    
+    private boolean tryModifyGameProtocol() {
+        try {
+            Class<?> gameProtocolClass = Class.forName("org.geysermc.geyser.network.GameProtocol");
+            if (debug) {
+                logger.info("找到 GameProtocol 类");
+            }
+            
+            // 尝试获取 SUPPORTED_BEDROCK_CODECS 字段
+            Field codecsField = gameProtocolClass.getDeclaredField("SUPPORTED_BEDROCK_CODECS");
+            codecsField.setAccessible(true);
+            
+            Object codecs = codecsField.get(null);
+            if (codecs instanceof java.util.List) {
+                java.util.List<?> codecsList = (java.util.List<?>) codecs;
+                if (debug) {
+                    logger.info("SUPPORTED_BEDROCK_CODECS 是一个 List，包含 " + codecsList.size() + " 个条目");
+                }
+                
+                // 尝试获取 BedrockCodec 类
+                Class<?> bedrockCodecClass = Class.forName("org.cloudburstmc.protocol.bedrock.codec.BedrockCodec");
+                
+                // 尝试获取 builder 方法
+                java.lang.reflect.Method builderMethod = bedrockCodecClass.getMethod("builder");
+                Object builder = builderMethod.invoke(null);
+                
+                // 尝试获取 protocolVersion 方法
+                java.lang.reflect.Method protocolVersionMethod = builder.getClass().getMethod("protocolVersion", int.class);
+                
+                // 尝试获取 build 方法
+                java.lang.reflect.Method buildMethod = builder.getClass().getMethod("build");
+                
+                // 创建新的 codec 并添加到列表中
+                for (int version = minProtocolVersion; version < 600; version++) {
+                    // 检查这个版本是否已经存在
+                    boolean exists = false;
+                    for (Object codec : codecsList) {
+                        java.lang.reflect.Method getProtocolVersionMethod = codec.getClass().getMethod("getProtocolVersion");
+                        int codecVersion = (int) getProtocolVersionMethod.invoke(codec);
+                        if (codecVersion == version) {
+                            exists = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!exists) {
+                        // 创建新的 codec
+                        protocolVersionMethod.invoke(builder, version);
+                        Object newCodec = buildMethod.invoke(builder);
+                        
+                        // 添加到列表中
+                        codecsList.add(newCodec);
+                        if (debug) {
+                            logger.info("添加协议版本 " + version + " 的支持");
+                        }
+                    }
+                }
+                
+                logger.info("成功修改 GameProtocol 的 SUPPORTED_BEDROCK_CODECS，添加了对低版本的支持");
+                return true;
+            }
+            
+            return false;
+        } catch (Exception e) {
+            logger.warning("修改 GameProtocol 失败: " + e.getMessage());
             if (debug) {
                 e.printStackTrace();
             }
