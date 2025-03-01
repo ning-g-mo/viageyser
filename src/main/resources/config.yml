@@ -1,0 +1,15 @@
+# ViaGeyser 配置文件
+
+# 是否启用插件
+enabled: true
+
+# 要支持的最低协议版本号
+# 默认值为 400，对应基岩版 1.16.0
+min-protocol-version: 400
+
+# 要支持的最高协议版本号
+# 设置为 -1 表示不限制最高版本
+max-protocol-version: -1
+
+# 调试模式
+debug: false 

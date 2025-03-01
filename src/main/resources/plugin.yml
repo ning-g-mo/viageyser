@@ -1,0 +1,7 @@
+name: ViaGeyser
+version: 1.0.0
+main: cn.ningmo.viageyser.ViaGeyser
+api-version: 1.21
+depend: [Geyser-Spigot]
+description: 劫持 Geyser 对基岩版的协议版本检查以便更低的基岩版玩家加入服务器
+author: ningmo 
