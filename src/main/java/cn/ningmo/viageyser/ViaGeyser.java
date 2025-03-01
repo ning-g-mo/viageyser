@@ -50,12 +50,23 @@ public class ViaGeyser extends JavaPlugin {
                     getLogger().info("成功应用 Geyser 协议版本钩子！");
                 } else {
                     getLogger().warning("应用 Geyser 协议版本钩子失败，请检查日志获取详细信息");
+                    
+                    // 如果第一次尝试失败，再次尝试
+                    getServer().getScheduler().runTaskLater(this, () -> {
+                        getLogger().info("正在重新尝试应用 Geyser 协议版本钩子...");
+                        boolean retrySuccess = hook.applyHook();
+                        if (retrySuccess) {
+                            getLogger().info("成功应用 Geyser 协议版本钩子！");
+                        } else {
+                            getLogger().warning("重新尝试应用 Geyser 协议版本钩子仍然失败");
+                        }
+                    }, 200L); // 再等待 10 秒
                 }
             } catch (Exception e) {
                 getLogger().severe("启用 ViaGeyser 时发生错误: " + e.getMessage());
                 e.printStackTrace();
             }
-        }, 40L); // 等待 2 秒确保 Geyser 已完全加载
+        }, 100L); // 等待 5 秒确保 Geyser 已完全加载
     }
 
     @Override
