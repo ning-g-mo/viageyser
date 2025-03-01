@@ -68,67 +68,57 @@ public class ProtocolVersionHook {
             String[] possibleClassPaths = {
                 "org.geysermc.geyser.network.BedrockProtocol",
                 "org.geysermc.geyser.translator.protocol.BedrockProtocol",
-                "org.geysermc.connector.network.BedrockProtocol"
+                "org.geysermc.connector.network.BedrockProtocol",
+                "org.geysermc.geyser.network.GameProtocol",
+                "org.geysermc.geyser.translator.protocol.PacketTranslator",
+                "org.geysermc.connector.network.session.GeyserSession",
+                "org.geysermc.geyser.session.GeyserSession",
+                "org.geysermc.geyser.network.MinecraftProtocol",
+                "org.geysermc.geyser.registry.type.MinecraftProtocol",
+                "org.geysermc.geyser.level.BedrockProtocol",
+                "org.geysermc.geyser.network.protocol.ProtocolVersion"
             };
             
+            // 尝试查找类
             Class<?> bedrockProtocolClass = null;
             for (String path : possibleClassPaths) {
                 try {
                     bedrockProtocolClass = Class.forName(path);
                     if (debug) {
-                        logger.info("找到 BedrockProtocol 类: " + path);
+                        logger.info("找到可能的协议类: " + path);
                     }
-                    break;
+                    
+                    // 尝试修改这个类中的版本字段
+                    boolean modified = tryModifyClassFields(bedrockProtocolClass);
+                    if (modified) {
+                        logger.info("成功修改 " + path + " 中的版本信息");
+                        return true;
+                    }
                 } catch (ClassNotFoundException ignored) {
                     // 继续尝试下一个路径
-                }
-            }
-            
-            if (bedrockProtocolClass == null) {
-                logger.warning("无法找到 BedrockProtocol 类");
-                return false;
-            }
-            
-            // 尝试修改各种可能的字段
-            boolean modified = false;
-            
-            // 尝试修改最小协议版本字段
-            String[] minVersionFields = {"MINIMUM_PROTOCOL_VERSION", "MIN_PROTOCOL_VERSION"};
-            for (String fieldName : minVersionFields) {
-                try {
-                    Field field = bedrockProtocolClass.getDeclaredField(fieldName);
-                    modified = modifyStaticIntField(field, minProtocolVersion) || modified;
-                    if (debug && modified) {
-                        logger.info("成功修改字段 " + fieldName + " 为 " + minProtocolVersion);
-                    }
-                } catch (NoSuchFieldException ignored) {
-                    // 继续尝试下一个字段
-                }
-            }
-            
-            // 如果设置了最大协议版本限制
-            if (maxProtocolVersion > 0) {
-                String[] maxVersionFields = {"MAXIMUM_PROTOCOL_VERSION", "MAX_PROTOCOL_VERSION"};
-                for (String fieldName : maxVersionFields) {
-                    try {
-                        Field field = bedrockProtocolClass.getDeclaredField(fieldName);
-                        modified = modifyStaticIntField(field, maxProtocolVersion) || modified;
-                        if (debug && modified) {
-                            logger.info("成功修改字段 " + fieldName + " 为 " + maxProtocolVersion);
-                        }
-                    } catch (NoSuchFieldException ignored) {
-                        // 继续尝试下一个字段
+                } catch (Exception e) {
+                    if (debug) {
+                        logger.warning("尝试修改 " + path + " 时出错: " + e.getMessage());
+                        e.printStackTrace();
                     }
                 }
             }
             
-            if (modified) {
-                logger.info("成功修改 BedrockProtocol 类中的版本信息");
-            } else {
-                logger.warning("未能修改 BedrockProtocol 类中的任何版本字段");
+            // 如果没有找到任何类，尝试直接查找和修改 Geyser 实例中的字段
+            if (debug) {
+                logger.info("尝试直接在 Geyser 实例中查找协议版本字段");
             }
             
-            return modified;
+            GeyserImpl geyser = GeyserImpl.getInstance();
+            if (geyser != null) {
+                boolean modified = tryModifyGeyserFields(geyser);
+                if (modified) {
+                    return true;
+                }
+            }
+            
+            logger.warning("无法找到或修改任何协议版本相关的类或字段");
+            return false;
         } catch (Exception e) {
             logger.warning("修改 BedrockProtocol 失败: " + e.getMessage());
             if (debug) {
@@ -136,6 +126,163 @@ public class ProtocolVersionHook {
             }
             return false;
         }
+    }
+    
+    private boolean tryModifyClassFields(Class<?> clazz) throws Exception {
+        boolean modified = false;
+        
+        // 尝试修改各种可能的字段名
+        String[] versionFields = {
+            "MINIMUM_PROTOCOL_VERSION", "MIN_PROTOCOL_VERSION", 
+            "BEDROCK_PROTOCOL_VERSION", "PROTOCOL_VERSION",
+            "CURRENT_PROTOCOL_VERSION", "SUPPORTED_PROTOCOL_VERSION",
+            "LATEST_PROTOCOL_VERSION", "BEDROCK_MINIMUM_VERSION",
+            "MINIMUM_VERSION", "LOWEST_PROTOCOL_VERSION"
+        };
+        
+        // 获取类中的所有字段
+        Field[] allFields = clazz.getDeclaredFields();
+        if (debug) {
+            logger.info("类 " + clazz.getName() + " 中的字段:");
+            for (Field field : allFields) {
+                logger.info("  - " + field.getName() + " (" + field.getType().getName() + ")");
+            }
+        }
+        
+        // 尝试修改指定名称的字段
+        for (String fieldName : versionFields) {
+            try {
+                Field field = clazz.getDeclaredField(fieldName);
+                if (field.getType() == int.class || field.getType() == Integer.class) {
+                    modified = modifyStaticIntField(field, minProtocolVersion) || modified;
+                    if (debug && modified) {
+                        logger.info("成功修改字段 " + fieldName + " 为 " + minProtocolVersion);
+                    }
+                }
+            } catch (NoSuchFieldException ignored) {
+                // 继续尝试下一个字段
+            }
+        }
+        
+        // 如果设置了最大协议版本限制
+        if (maxProtocolVersion > 0) {
+            String[] maxVersionFields = {
+                "MAXIMUM_PROTOCOL_VERSION", "MAX_PROTOCOL_VERSION",
+                "HIGHEST_PROTOCOL_VERSION", "LATEST_PROTOCOL_VERSION"
+            };
+            
+            for (String fieldName : maxVersionFields) {
+                try {
+                    Field field = clazz.getDeclaredField(fieldName);
+                    if (field.getType() == int.class || field.getType() == Integer.class) {
+                        modified = modifyStaticIntField(field, maxProtocolVersion) || modified;
+                        if (debug && modified) {
+                            logger.info("成功修改字段 " + fieldName + " 为 " + maxProtocolVersion);
+                        }
+                    }
+                } catch (NoSuchFieldException ignored) {
+                    // 继续尝试下一个字段
+                }
+            }
+        }
+        
+        // 尝试查找和修改任何看起来像协议版本的整数常量字段
+        for (Field field : allFields) {
+            String name = field.getName().toUpperCase();
+            if ((name.contains("PROTOCOL") || name.contains("VERSION")) && 
+                (field.getType() == int.class || field.getType() == Integer.class)) {
+                try {
+                    field.setAccessible(true);
+                    int value = field.getInt(null);
+                    
+                    // 如果字段名包含 MIN 或 MINIMUM，并且值大于我们的最小值
+                    if ((name.contains("MIN") || name.contains("MINIMUM") || name.contains("LOWEST")) && value > minProtocolVersion) {
+                        modified = modifyStaticIntField(field, minProtocolVersion) || modified;
+                        if (debug) {
+                            logger.info("修改疑似最小版本字段 " + field.getName() + " 从 " + value + " 到 " + minProtocolVersion);
+                        }
+                    }
+                    
+                    // 如果字段名包含 MAX 或 MAXIMUM，并且我们设置了最大值限制
+                    if (maxProtocolVersion > 0 && (name.contains("MAX") || name.contains("MAXIMUM") || name.contains("HIGHEST")) && value < maxProtocolVersion) {
+                        modified = modifyStaticIntField(field, maxProtocolVersion) || modified;
+                        if (debug) {
+                            logger.info("修改疑似最大版本字段 " + field.getName() + " 从 " + value + " 到 " + maxProtocolVersion);
+                        }
+                    }
+                } catch (Exception e) {
+                    if (debug) {
+                        logger.warning("尝试修改字段 " + field.getName() + " 时出错: " + e.getMessage());
+                    }
+                }
+            }
+        }
+        
+        return modified;
+    }
+    
+    private boolean tryModifyGeyserFields(GeyserImpl geyser) {
+        boolean modified = false;
+        
+        try {
+            // 尝试获取 Geyser 实例中的所有字段
+            Field[] fields = geyser.getClass().getDeclaredFields();
+            
+            for (Field field : fields) {
+                field.setAccessible(true);
+                String name = field.getName().toLowerCase();
+                
+                // 查找可能包含协议信息的字段
+                if (name.contains("protocol") || name.contains("version") || name.contains("translator")) {
+                    Object fieldValue = field.get(geyser);
+                    if (fieldValue != null) {
+                        if (debug) {
+                            logger.info("检查 Geyser 字段: " + field.getName() + " (" + fieldValue.getClass().getName() + ")");
+                        }
+                        
+                        // 递归检查这个字段中的所有字段
+                        modified = tryModifyClassFields(fieldValue.getClass()) || modified;
+                        
+                        // 如果这个字段是一个对象，尝试修改它的字段
+                        if (!fieldValue.getClass().isPrimitive() && !fieldValue.getClass().getName().startsWith("java.lang")) {
+                            Field[] subFields = fieldValue.getClass().getDeclaredFields();
+                            for (Field subField : subFields) {
+                                String subName = subField.getName().toUpperCase();
+                                if ((subName.contains("PROTOCOL") || subName.contains("VERSION")) && 
+                                    (subField.getType() == int.class || subField.getType() == Integer.class)) {
+                                    subField.setAccessible(true);
+                                    int value = subField.getInt(fieldValue);
+                                    
+                                    if (debug) {
+                                        logger.info("  - 子字段: " + subField.getName() + " = " + value);
+                                    }
+                                    
+                                    // 尝试修改这个子字段
+                                    if (subName.contains("MIN") && value > minProtocolVersion) {
+                                        subField.set(fieldValue, minProtocolVersion);
+                                        modified = true;
+                                        logger.info("修改 " + field.getName() + "." + subField.getName() + " 从 " + value + " 到 " + minProtocolVersion);
+                                    }
+                                    
+                                    if (maxProtocolVersion > 0 && subName.contains("MAX") && value < maxProtocolVersion) {
+                                        subField.set(fieldValue, maxProtocolVersion);
+                                        modified = true;
+                                        logger.info("修改 " + field.getName() + "." + subField.getName() + " 从 " + value + " 到 " + maxProtocolVersion);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Exception e) {
+            if (debug) {
+                logger.warning("尝试修改 Geyser 实例字段时出错: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+        
+        return modified;
     }
     
     private boolean modifyStaticIntField(Field field, int newValue) throws Exception {
