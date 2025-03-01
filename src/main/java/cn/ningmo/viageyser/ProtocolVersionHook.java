@@ -518,70 +518,285 @@ public class ProtocolVersionHook {
                 logger.info("找到 GameProtocol 类");
             }
             
-            // 尝试获取 SUPPORTED_BEDROCK_CODECS 字段
-            Field codecsField = gameProtocolClass.getDeclaredField("SUPPORTED_BEDROCK_CODECS");
-            codecsField.setAccessible(true);
+            // 尝试直接修改 DEFAULT_BEDROCK_CODEC
+            Field defaultCodecField = gameProtocolClass.getDeclaredField("DEFAULT_BEDROCK_CODEC");
+            defaultCodecField.setAccessible(true);
+            Object defaultCodec = defaultCodecField.get(null);
             
-            Object codecs = codecsField.get(null);
-            if (codecs instanceof java.util.List) {
-                // 使用原始类型避免泛型转换问题
-                @SuppressWarnings("unchecked")
-                java.util.List<Object> codecsList = (java.util.List<Object>) codecs;
-                
+            if (defaultCodec != null) {
                 if (debug) {
-                    logger.info("SUPPORTED_BEDROCK_CODECS 是一个 List，包含 " + codecsList.size() + " 个条目");
+                    logger.info("找到 DEFAULT_BEDROCK_CODEC: " + defaultCodec.getClass().getName());
                 }
                 
-                // 尝试获取 BedrockCodec 类
-                Class<?> bedrockCodecClass = Class.forName("org.cloudburstmc.protocol.bedrock.codec.BedrockCodec");
+                // 获取协议版本
+                Method getProtocolVersionMethod = defaultCodec.getClass().getMethod("getProtocolVersion");
+                int protocolVersion = (int) getProtocolVersionMethod.invoke(defaultCodec);
                 
-                // 尝试获取 builder 方法
-                java.lang.reflect.Method builderMethod = bedrockCodecClass.getMethod("builder");
-                Object builder = builderMethod.invoke(null);
+                if (debug) {
+                    logger.info("DEFAULT_BEDROCK_CODEC 的协议版本: " + protocolVersion);
+                }
                 
-                // 尝试获取 protocolVersion 方法
-                java.lang.reflect.Method protocolVersionMethod = builder.getClass().getMethod("protocolVersion", int.class);
+                // 尝试获取 SUPPORTED_BEDROCK_CODECS 字段
+                Field codecsField = gameProtocolClass.getDeclaredField("SUPPORTED_BEDROCK_CODECS");
+                codecsField.setAccessible(true);
                 
-                // 尝试获取 build 方法
-                java.lang.reflect.Method buildMethod = builder.getClass().getMethod("build");
-                
-                // 创建新的 codec 并添加到列表中
-                boolean modified = false;
-                for (int version = minProtocolVersion; version < 600; version++) {
-                    // 检查这个版本是否已经存在
-                    boolean exists = false;
-                    for (Object codec : codecsList) {
-                        java.lang.reflect.Method getProtocolVersionMethod = codec.getClass().getMethod("getProtocolVersion");
-                        int codecVersion = (int) getProtocolVersionMethod.invoke(codec);
-                        if (codecVersion == version) {
-                            exists = true;
-                            break;
+                Object codecs = codecsField.get(null);
+                if (codecs instanceof java.util.List) {
+                    @SuppressWarnings("unchecked")
+                    java.util.List<Object> codecsList = (java.util.List<Object>) codecs;
+                    
+                    if (debug) {
+                        logger.info("SUPPORTED_BEDROCK_CODECS 是一个 List，包含 " + codecsList.size() + " 个条目");
+                        
+                        // 打印所有支持的版本
+                        logger.info("当前支持的协议版本:");
+                        for (Object codec : codecsList) {
+                            int version = (int) getProtocolVersionMethod.invoke(codec);
+                            logger.info("  - " + version);
                         }
                     }
                     
-                    if (!exists) {
-                        // 创建新的 codec
-                        protocolVersionMethod.invoke(builder, version);
-                        Object newCodec = buildMethod.invoke(builder);
-                        
-                        // 添加到列表中
-                        codecsList.add(newCodec);
-                        if (debug) {
-                            logger.info("添加协议版本 " + version + " 的支持");
-                        }
-                        modified = true;
-                    }
-                }
-                
-                if (modified) {
-                    logger.info("成功修改 GameProtocol 的 SUPPORTED_BEDROCK_CODECS，添加了对低版本的支持");
-                    return true;
+                    // 尝试直接修改 UpstreamPacketHandler 中的版本检查
+                    return tryModifyUpstreamPacketHandler();
                 }
             }
             
             return false;
         } catch (Exception e) {
             logger.warning("修改 GameProtocol 失败: " + e.getMessage());
+            if (debug) {
+                e.printStackTrace();
+            }
+            return false;
+        }
+    }
+    
+    private boolean tryModifyUpstreamPacketHandler() {
+        try {
+            // 尝试找到 UpstreamPacketHandler 类
+            Class<?> handlerClass = Class.forName("org.geysermc.geyser.network.UpstreamPacketHandler");
+            
+            if (debug) {
+                logger.info("找到 UpstreamPacketHandler 类");
+                
+                // 打印所有方法
+                Method[] methods = handlerClass.getDeclaredMethods();
+                logger.info("UpstreamPacketHandler 类中的方法:");
+                for (Method method : methods) {
+                    logger.info("  - " + method.getName() + "(" + java.util.Arrays.toString(method.getParameterTypes()) + ")");
+                }
+            }
+            
+            // 尝试找到处理登录包的方法
+            Method loginMethod = null;
+            for (Method method : handlerClass.getDeclaredMethods()) {
+                if (method.getName().contains("Login") || method.getName().contains("login")) {
+                    loginMethod = method;
+                    if (debug) {
+                        logger.info("找到可能的登录方法: " + method.getName());
+                    }
+                    break;
+                }
+            }
+            
+            if (loginMethod == null) {
+                // 尝试找到任何处理包的方法
+                for (Method method : handlerClass.getDeclaredMethods()) {
+                    if (method.getName().contains("handle") || method.getName().contains("Handle")) {
+                        Class<?>[] paramTypes = method.getParameterTypes();
+                        if (paramTypes.length > 0 && 
+                            (paramTypes[0].getName().contains("Login") || 
+                             paramTypes[0].getName().contains("login") ||
+                             paramTypes[0].getName().contains("Request"))) {
+                            loginMethod = method;
+                            if (debug) {
+                                logger.info("找到可能的登录方法: " + method.getName());
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (loginMethod == null) {
+                logger.warning("无法找到处理登录的方法");
+                
+                // 尝试直接修改 BedrockClientData 类
+                return tryModifyBedrockClientData();
+            }
+            
+            // 尝试修改 BedrockClientData 类
+            return tryModifyBedrockClientData();
+        } catch (Exception e) {
+            logger.warning("修改 UpstreamPacketHandler 失败: " + e.getMessage());
+            if (debug) {
+                e.printStackTrace();
+            }
+            return false;
+        }
+    }
+    
+    private boolean tryModifyBedrockClientData() {
+        try {
+            // 尝试找到 BedrockClientData 类
+            Class<?> clientDataClass = Class.forName("org.geysermc.geyser.session.auth.BedrockClientData");
+            
+            if (debug) {
+                logger.info("找到 BedrockClientData 类");
+                
+                // 打印所有字段
+                Field[] fields = clientDataClass.getDeclaredFields();
+                logger.info("BedrockClientData 类中的字段:");
+                for (Field field : fields) {
+                    field.setAccessible(true);
+                    logger.info("  - " + field.getName() + " (" + field.getType().getName() + ")");
+                }
+            }
+            
+            // 尝试找到 GameVersion 类
+            Class<?> gameVersionClass = Class.forName("org.geysermc.geyser.session.auth.BedrockClientData$GameVersion");
+            
+            if (debug) {
+                logger.info("找到 GameVersion 类");
+                
+                // 打印所有字段
+                Field[] fields = gameVersionClass.getDeclaredFields();
+                logger.info("GameVersion 类中的字段:");
+                for (Field field : fields) {
+                    field.setAccessible(true);
+                    logger.info("  - " + field.getName() + " (" + field.getType().getName() + ")");
+                }
+            }
+            
+            // 尝试修改 UpstreamSession 类
+            return tryModifyUpstreamSession();
+        } catch (Exception e) {
+            logger.warning("修改 BedrockClientData 失败: " + e.getMessage());
+            if (debug) {
+                e.printStackTrace();
+            }
+            return false;
+        }
+    }
+    
+    private boolean tryModifyUpstreamSession() {
+        try {
+            // 尝试找到 UpstreamSession 类
+            Class<?> sessionClass = Class.forName("org.geysermc.geyser.session.UpstreamSession");
+            
+            if (debug) {
+                logger.info("找到 UpstreamSession 类");
+                
+                // 打印所有方法
+                Method[] methods = sessionClass.getDeclaredMethods();
+                logger.info("UpstreamSession 类中的方法:");
+                for (Method method : methods) {
+                    logger.info("  - " + method.getName() + "(" + java.util.Arrays.toString(method.getParameterTypes()) + ")");
+                }
+            }
+            
+            // 尝试找到检查协议版本的方法
+            Method checkVersionMethod = null;
+            for (Method method : sessionClass.getDeclaredMethods()) {
+                if (method.getName().contains("Version") || 
+                    method.getName().contains("version") || 
+                    method.getName().contains("Protocol") || 
+                    method.getName().contains("protocol") ||
+                    method.getName().contains("Check") ||
+                    method.getName().contains("check")) {
+                    checkVersionMethod = method;
+                    if (debug) {
+                        logger.info("找到可能的版本检查方法: " + method.getName());
+                    }
+                    break;
+                }
+            }
+            
+            if (checkVersionMethod != null) {
+                // 尝试修改这个方法
+                logger.info("找到可能的版本检查方法，但无法直接修改方法实现");
+            }
+            
+            // 尝试修改 BedrockCodec 类的静态初始化块
+            return tryModifyBedrockCodecStaticInit();
+        } catch (Exception e) {
+            logger.warning("修改 UpstreamSession 失败: " + e.getMessage());
+            if (debug) {
+                e.printStackTrace();
+            }
+            return false;
+        }
+    }
+    
+    private boolean tryModifyBedrockCodecStaticInit() {
+        try {
+            // 尝试找到 BedrockCodec 类
+            Class<?> bedrockCodecClass = Class.forName("org.cloudburstmc.protocol.bedrock.codec.BedrockCodec");
+            
+            if (debug) {
+                logger.info("找到 BedrockCodec 类，尝试修改静态初始化块");
+            }
+            
+            // 尝试获取所有静态字段
+            Field[] fields = bedrockCodecClass.getDeclaredFields();
+            for (Field field : fields) {
+                if (java.lang.reflect.Modifier.isStatic(field.getModifiers())) {
+                    field.setAccessible(true);
+                    if (debug) {
+                        logger.info("静态字段: " + field.getName() + " (" + field.getType().getName() + ")");
+                    }
+                    
+                    // 如果是 Map 类型，尝试修改
+                    if (field.getType().getName().contains("Map")) {
+                        Object map = field.get(null);
+                        if (map instanceof java.util.Map) {
+                            @SuppressWarnings("unchecked")
+                            java.util.Map<Object, Object> codecMap = (java.util.Map<Object, Object>) map;
+                            
+                            if (debug) {
+                                logger.info("找到 Map 字段: " + field.getName() + "，包含 " + codecMap.size() + " 个条目");
+                            }
+                            
+                            // 尝试找到最新的 codec
+                            Object latestCodec = null;
+                            Integer latestVersion = null;
+                            for (Object key : codecMap.keySet()) {
+                                if (key instanceof Integer) {
+                                    int version = (Integer) key;
+                                    if (latestVersion == null || version > latestVersion) {
+                                        latestVersion = version;
+                                        latestCodec = codecMap.get(key);
+                                    }
+                                }
+                            }
+                            
+                            if (latestCodec != null && latestVersion != null) {
+                                // 为低版本添加相同的 codec
+                                boolean modified = false;
+                                for (int version = minProtocolVersion; version < latestVersion; version++) {
+                                    if (!codecMap.containsKey(version)) {
+                                        codecMap.put(version, latestCodec);
+                                        if (debug) {
+                                            logger.info("添加协议版本 " + version + " 的支持");
+                                        }
+                                        modified = true;
+                                    }
+                                }
+                                
+                                if (modified) {
+                                    logger.info("成功修改 BedrockCodec 的 Map 字段，添加了对低版本的支持");
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            logger.warning("无法找到或修改 BedrockCodec 的静态初始化块");
+            return false;
+        } catch (Exception e) {
+            logger.warning("修改 BedrockCodec 静态初始化块失败: " + e.getMessage());
             if (debug) {
                 e.printStackTrace();
             }
