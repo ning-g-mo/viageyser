@@ -456,7 +456,10 @@ public class ProtocolVersionHook {
             Object lookup = lookupField.get(null);
             
             if (lookup instanceof java.util.Map) {
-                java.util.Map<?, ?> map = (java.util.Map<?, ?>) lookup;
+                // 使用原始类型避免泛型转换问题
+                @SuppressWarnings("unchecked")
+                java.util.Map<Object, Object> map = (java.util.Map<Object, Object>) lookup;
+                
                 if (debug) {
                     logger.info("CODEC_LOOKUP 是一个 Map，包含 " + map.size() + " 个条目");
                     for (Object key : map.keySet()) {
@@ -478,28 +481,21 @@ public class ProtocolVersionHook {
                 }
                 
                 if (latestCodec != null && latestVersion != null) {
-                    // 尝试使用反射修改 Map
-                    try {
-                        // 获取 Map 的 put 方法
-                        java.lang.reflect.Method putMethod = map.getClass().getMethod("put", Object.class, Object.class);
-                        
-                        // 为低版本添加相同的 codec
-                        for (int version = minProtocolVersion; version < latestVersion; version++) {
-                            if (!map.containsKey(version)) {
-                                putMethod.invoke(map, version, latestCodec);
-                                if (debug) {
-                                    logger.info("添加协议版本 " + version + " 的支持");
-                                }
+                    // 为低版本添加相同的 codec
+                    boolean modified = false;
+                    for (int version = minProtocolVersion; version < latestVersion; version++) {
+                        if (!map.containsKey(version)) {
+                            map.put(version, latestCodec);
+                            if (debug) {
+                                logger.info("添加协议版本 " + version + " 的支持");
                             }
+                            modified = true;
                         }
-                        
+                    }
+                    
+                    if (modified) {
                         logger.info("成功修改 BedrockCodec 的 CODEC_LOOKUP，添加了对低版本的支持");
                         return true;
-                    } catch (Exception e) {
-                        if (debug) {
-                            logger.warning("修改 CODEC_LOOKUP 失败: " + e.getMessage());
-                            e.printStackTrace();
-                        }
                     }
                 }
             }
